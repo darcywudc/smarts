@@ -22,5 +22,9 @@ def home():
 
     return render_template('index.html', greeting="")
 
+@app.route('/bolt')
+def bolt():
+    return render_template('bolt.html')
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)

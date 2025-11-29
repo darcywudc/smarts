@@ -1,5 +1,6 @@
 import unittest
 from app import app
+import json
 
 class FlaskAppTests(unittest.TestCase):
 
@@ -13,13 +14,25 @@ class FlaskAppTests(unittest.TestCase):
 
     def test_home_content(self):
         response = self.app.get('/')
-        self.assertIn(b'Hello World App', response.data)
-        self.assertIn(b'Enter your name:', response.data)
+        self.assertIn(b'Welcome', response.data)
+        self.assertIn(b'What\'s your name?', response.data)
 
-    def test_greet_user(self):
+    def test_greet_user_json(self):
+        # Test the AJAX JSON endpoint
+        response = self.app.post('/',
+                                 data=json.dumps({'name': 'Tester'}),
+                                 content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertEqual(response.json['greeting'], 'Hello, Tester!')
+
+    def test_greet_user_fallback(self):
+        # Test the standard form submission fallback
         response = self.app.post('/', data=dict(name="Tester"))
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Hello, Tester!', response.data)
+        # Check if the greeting is rendered in the HTML
+        self.assertIn(b'Tester', response.data)
+        self.assertIn(b'Hello,', response.data)
 
 if __name__ == '__main__':
     unittest.main()

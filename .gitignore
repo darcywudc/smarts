@@ -1,2 +1,8 @@
 node_modules
 dist
+venv/
+__pycache__/
+.pytest_cache/
+google-cloud-sdk/
+google-cloud-cli-linux-x86_64.tar.gz
+gcp_key.json

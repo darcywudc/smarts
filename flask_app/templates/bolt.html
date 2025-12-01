@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Bolt Stress Simulation</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Roboto', sans-serif; background-color: #1a1a2e; color: white; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 300px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        h2 { margin-top: 0; font-weight: 400; letter-spacing: 1px; color: #00f2ff; }
+        .control-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: #ccc; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #00f2ff; font-weight: bold; }
+        .legend {
+            margin-top: 20px;
+            height: 20px;
+            background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000);
+            border-radius: 4px;
+            position: relative;
+        }
+        .legend-labels { display: flex; justify-content: space-between; font-size: 0.7rem; margin-top: 5px; color: #aaa; }
+
+        #back-link {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            font-size: 0.9rem;
+            z-index: 100;
+            padding: 8px 16px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 20px;
+            transition: all 0.2s;
+        }
+        #back-link:hover { background: rgba(0,0,0,0.8); color: white; }
+    </style>
+    <!-- Import Three.js as a module map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <a href="/" id="back-link">← Back to Home</a>
+    <div id="canvas-container"></div>
+    <div id="ui-container">
+        <h2>Bolt Simulation</h2>
+        <div class="control-group">
+            <label>Tension Force (kN) <span id="force-val" class="value-display">0</span></label>
+            <input type="range" id="force-slider" min="0" max="100" value="0" step="1">
+        </div>
+        <div class="control-group">
+            <label>Rotation Speed <span id="speed-val" class="value-display">1.0</span></label>
+            <input type="range" id="speed-slider" min="0" max="5" value="1" step="0.1">
+        </div>
+
+        <label>Von Mises Stress (MPa)</label>
+        <div class="legend"></div>
+        <div class="legend-labels">
+            <span>0</span>
+            <span>250</span>
+            <span>500+</span>
+        </div>
+
+        <p style="font-size: 0.8rem; color: #888; margin-top: 15px;">
+            Simulating elastic deformation and stress concentration at the thread roots.
+        </p>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- Configuration ---
+        const config = {
+            boltHeadRadius: 10,
+            boltHeadHeight: 8,
+            shankRadius: 5,
+            shankLength: 20,
+            threadRadius: 5,
+            threadLength: 30,
+            threadPitch: 1.5,
+            threadDepth: 0.8
+        };
+
+        let force = 0;
+        let rotationSpeed = 0.005;
+
+        // --- Scene Setup ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+        scene.fog = new THREE.FogExp2(0x1a1a2e, 0.002);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(50, 40, 60);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // --- Lighting ---
+        const ambientLight = new THREE.AmbientLight(0x404040, 2); // Soft white light
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+        dirLight.position.set(20, 50, 30);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
+
+        const blueLight = new THREE.PointLight(0x0088ff, 2, 50);
+        blueLight.position.set(-20, 10, 0);
+        scene.add(blueLight);
+
+        const redLight = new THREE.PointLight(0xff0044, 2, 50);
+        redLight.position.set(20, -20, 0);
+        scene.add(redLight);
+
+        // --- Bolt Geometry Generation ---
+
+        // 1. Hex Head
+        const headGeo = new THREE.CylinderGeometry(config.boltHeadRadius, config.boltHeadRadius, config.boltHeadHeight, 6);
+        // Translate geometry so origin is at the bottom center of the head
+        headGeo.translate(0, config.boltHeadHeight / 2, 0);
+
+        // 2. Shank (Unthreaded part)
+        const shankGeo = new THREE.CylinderGeometry(config.shankRadius, config.shankRadius, config.shankLength, 32);
+        shankGeo.translate(0, -config.shankLength / 2, 0);
+
+        // 3. Thread (Procedural Spiral)
+        // We'll simulate threads using a custom ExtrudeGeometry or a TubeGeometry along a helix
+        // For better shader manipulation, let's create a custom Lathe-like geometry or just a detailed cylinder with displacement map
+        // But to be "Amazing", let's generate actual geometry for threads.
+
+        function createThreadGeometry(radius, length, pitch, depth) {
+            const numTurns = length / pitch;
+            const pointsPerTurn = 32;
+            const totalPoints = Math.ceil(numTurns * pointsPerTurn);
+
+            const vertices = [];
+            const indices = [];
+            const uvs = [];
+
+            // We create a profile: a triangle wave wrapped around a cylinder
+            for (let i = 0; i <= totalPoints; i++) {
+                const angle = (i / pointsPerTurn) * Math.PI * 2;
+                const yBase = -(i / pointsPerTurn) * pitch; // Going down
+
+                // We need rings of vertices to form the thread profile
+                // Outer edge (crest), Inner edge (root), etc.
+                // Simplified: Just a perturbed cylinder radius
+
+                // Let's try TubeGeometry along a helix curve instead, usually looks better and easier
+                // But merging meshes for stress shader is harder.
+                // Let's stick to a high-res cylinder and modify positions in a shader?
+                // No, physical geometry is better.
+            }
+            // Fallback: Tube along helix
+            class HelixCurve extends THREE.Curve {
+                constructor(radius, height, turns) {
+                    super();
+                    this.radius = radius;
+                    this.height = height;
+                    this.turns = turns;
+                }
+                getPoint(t) {
+                    const angle = t * Math.PI * 2 * this.turns;
+                    const x = this.radius * Math.cos(angle);
+                    const z = this.radius * Math.sin(angle);
+                    const y = -t * this.height;
+                    return new THREE.Vector3(x, y, z);
+                }
+            }
+
+            const helix = new HelixCurve(radius, length, numTurns);
+            const tubeGeo = new THREE.TubeGeometry(helix, 200, depth, 3, false); // Triangle cross section approx
+            return tubeGeo;
+        }
+
+        // Simpler Thread approach: Textures/Normal Map for visual, Cylinder for physics
+        // Wait, user wants "Simulation". Let's do a Cylinder with a custom shader that displaces vertices to look like threads
+        // AND colors them based on stress.
+
+        const totalShaftLength = config.shankLength + config.threadLength;
+
+        // Custom Shader Material for the Bolt
+        const boltMaterial = new THREE.MeshStandardMaterial({
+            color: 0xaaaaaa,
+            metalness: 0.8,
+            roughness: 0.4,
+            flatShading: false
+        });
+
+        // We will modify the material to support Vertex Colors for stress visualization
+        boltMaterial.vertexColors = true;
+
+        // Combine geometries
+        // Head
+        const headMesh = new THREE.Mesh(headGeo, boltMaterial.clone());
+        scene.add(headMesh);
+
+        // Shaft (Shank + Thread area)
+        // We use a high segment cylinder to allow for smooth stress coloring
+        const shaftGeo = new THREE.CylinderGeometry(config.shankRadius, config.shankRadius, totalShaftLength, 32, 50, true);
+        shaftGeo.translate(0, -totalShaftLength / 2, 0);
+
+        // We need to bake "Thread" appearance into the normals or geometry of the bottom part of the shaft
+        const positionAttribute = shaftGeo.attributes.position;
+        const vertex = new THREE.Vector3();
+        const colors = [];
+        const color = new THREE.Color();
+
+        // Initial Color (Grey)
+        for (let i = 0; i < positionAttribute.count; i++) {
+            colors.push(0.8, 0.8, 0.8);
+        }
+        shaftGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+        const shaftMesh = new THREE.Mesh(shaftGeo, boltMaterial.clone());
+        scene.add(shaftMesh);
+
+        // Thread Visuals: A separate helical tube intertwined with the shaft to simulate threads popping out
+        const threadCurve = new THREE.CatmullRomCurve3([]);
+        const turns = config.threadLength / config.threadPitch;
+        for (let i = 0; i <= turns * 20; i++) {
+            const t = i / (turns * 20);
+            const angle = t * turns * Math.PI * 2;
+            const y = -config.shankLength - (t * config.threadLength);
+            const r = config.shankRadius;
+            threadCurve.points.push(new THREE.Vector3(r * Math.cos(angle), y, r * Math.sin(angle)));
+        }
+
+        // Profile for thread: triangle
+        // We just use a thin tube for visual effect of threads
+        const threadGeo = new THREE.TubeGeometry(threadCurve, 400, 0.6, 3, false);
+        const threadMat = new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.7, roughness: 0.5 });
+        const threadMesh = new THREE.Mesh(threadGeo, threadMat);
+        scene.add(threadMesh);
+
+
+        // --- Arrows (Force Vectors) ---
+        const arrowGroup = new THREE.Group();
+        scene.add(arrowGroup);
+
+        const arrowColor = 0xff0000;
+        const arrowHeadLen = 3;
+        const arrowHeadWidth = 2;
+        const arrowLen = 15;
+
+        // Top Arrow (Pulling Head Up)
+        const topArrow = new THREE.ArrowHelper(
+            new THREE.Vector3(0, 1, 0),
+            new THREE.Vector3(0, config.boltHeadHeight + 2, 0),
+            arrowLen,
+            arrowColor,
+            arrowHeadLen,
+            arrowHeadWidth
+        );
+        arrowGroup.add(topArrow);
+
+        // Bottom Arrow (Pulling Nut/Shaft Down)
+        const bottomArrow = new THREE.ArrowHelper(
+            new THREE.Vector3(0, -1, 0),
+            new THREE.Vector3(0, -totalShaftLength - 2, 0),
+            arrowLen,
+            arrowColor,
+            arrowHeadLen,
+            arrowHeadWidth
+        );
+        arrowGroup.add(bottomArrow);
+
+        arrowGroup.visible = false; // Hidden initially
+
+        // --- Grid/Floor ---
+        const gridHelper = new THREE.GridHelper(200, 20, 0x555555, 0x222222);
+        gridHelper.position.y = -totalShaftLength - 20;
+        scene.add(gridHelper);
+
+
+        // --- Simulation Logic ---
+
+        function updateStress(tensionLoad) {
+            // Normalized load 0 to 1
+            const load = tensionLoad / 100;
+
+            // 1. Deformation (Stretching)
+            // Stretch the shaft along Y
+            const stretchFactor = 1 + (load * 0.05); // Max 5% stretch
+            shaftMesh.scale.set(1 - (load * 0.01), stretchFactor, 1 - (load * 0.01)); // Poisson effect approx
+            threadMesh.scale.setY(stretchFactor);
+
+            // Update thread position to match shaft stretch
+            // The thread mesh origin is at (0,0,0) but points are negative Y.
+            // Scaling Y works, but since the shaft top is at 0, both stretch downwards correctly.
+
+            // 2. Stress Coloring (Heatmap)
+            // Stress concentrates at the transition from Shank to Thread and within Threads
+            // Shank ends at -config.shankLength (-20)
+
+            const positions = shaftGeo.attributes.position;
+            const colorAttr = shaftMesh.geometry.attributes.color;
+
+            // Color map: Blue (0) -> Cyan -> Green -> Yellow -> Red (1)
+            // We'll just interpolate Blue to Red for simplicity
+
+            for (let i = 0; i < positions.count; i++) {
+                vertex.fromBufferAttribute(positions, i);
+
+                // Calculate local stress factor based on Y position
+                // Highest stress at the first engaged thread (approx -20 to -25 range)
+                let localStress = 0;
+
+                // Simple stress model: Uniform tension in shank, concentration at thread start
+                const y = vertex.y; // vertex.y is in local space, scaling applies after
+
+                // Thread start area
+                const threadStart = -config.shankLength;
+
+                if (y > threadStart + 2) {
+                    // Head/Upper Shank - Low uniform stress
+                    localStress = load * 0.3;
+                } else if (y > threadStart - 5) {
+                    // Stress Concentration Zone (first few threads)
+                    localStress = load * 1.0;
+                } else {
+                    // Lower threads - dissipating stress
+                    // Linear drop off
+                    const dist = Math.abs(y - (threadStart - 5));
+                    localStress = Math.max(0, (load * 0.8) - (dist * 0.03));
+                }
+
+                // Add noise for realism
+                localStress += (Math.random() - 0.5) * 0.1 * load;
+                localStress = Math.min(Math.max(localStress, 0), 1);
+
+                // Map stress to color (HSL: 240deg (blue) to 0deg (red))
+                // 0 -> 0.66 (Blue), 1 -> 0.0 (Red)
+                const hue = (1.0 - localStress) * 0.66; // 0.66 is Blue in HSL (240/360)
+                color.setHSL(hue, 1.0, 0.5);
+
+                colorAttr.setXYZ(i, color.r, color.g, color.b);
+            }
+            colorAttr.needsUpdate = true;
+
+            // 3. Arrows
+            if (load > 0.01) {
+                arrowGroup.visible = true;
+                const scale = 0.5 + load * 1.5; // Scale from 0.5x to 2.0x
+                topArrow.scale.set(scale, scale, scale);
+                bottomArrow.scale.set(scale, scale, scale);
+
+                // Update position due to stretch
+                bottomArrow.position.y = (-totalShaftLength * stretchFactor) - 2;
+            } else {
+                arrowGroup.visible = false;
+            }
+        }
+
+        // --- Event Listeners ---
+        const forceSlider = document.getElementById('force-slider');
+        const forceVal = document.getElementById('force-val');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedVal = document.getElementById('speed-val');
+
+        forceSlider.addEventListener('input', (e) => {
+            force = parseInt(e.target.value);
+            forceVal.textContent = force;
+            updateStress(force);
+        });
+
+        speedSlider.addEventListener('input', (e) => {
+            rotationSpeed = parseFloat(e.target.value) * 0.005;
+            speedVal.textContent = e.target.value;
+        });
+
+        // Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Rotate Bolt
+            headMesh.rotation.y += rotationSpeed;
+            shaftMesh.rotation.y += rotationSpeed;
+            threadMesh.rotation.y += rotationSpeed;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+    </script>
+</body>
+</html>
